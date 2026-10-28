@@ -1,9 +1,9 @@
 name: CI
 
+# Runs only on pushes to main: pull requests and other branches build nothing.
 on:
   push:
     branches: [main]
-  pull_request:
 
 jobs:
   test:
