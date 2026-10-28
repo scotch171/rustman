@@ -91,42 +91,6 @@ pub fn highlight(text: &str, dark: bool) -> LayoutJob {
     job
 }
 
-/// Read-only, selectable, highlighted text view with a line-number gutter.
-pub fn code_view(ui: &mut egui::Ui, text: &str, job: &LayoutJob, gutter: &str) {
-    let weak = ui.visuals().weak_text_color();
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let mut numbers = gutter;
-        let digits = gutter.lines().last().map_or(1, |l| l.trim().len()) as f32;
-        ui.add(
-            egui::TextEdit::multiline(&mut numbers)
-                .font(FontId::monospace(13.0))
-                .text_color(weak)
-                .frame(false)
-                .interactive(false)
-                .desired_width(digits * 8.0 + 10.0),
-        );
-        let mut layouter =
-            |ui: &egui::Ui, _s: &str, _wrap: f32| ui.fonts(|f| f.layout_job(job.clone()));
-        let mut buf = text;
-        ui.add(
-            egui::TextEdit::multiline(&mut buf)
-                .frame(false)
-                .desired_width(f32::INFINITY)
-                .layouter(&mut layouter),
-        );
-    });
-}
-
-pub fn line_numbers(text: &str) -> String {
-    let n = text.lines().count().max(1);
-    let width = n.to_string().len();
-    (1..=n)
-        .map(|i| format!("{i:>width$}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 pub struct TreeState {
     /// Changing the generation resets all collapsing headers.
     pub generation: u64,

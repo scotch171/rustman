@@ -2,6 +2,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
+mod code_view;
 mod curl;
 mod http;
 mod json_view;

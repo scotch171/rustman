@@ -1,11 +1,12 @@
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, text::LayoutJob, Color32, FontId, Key, KeyboardShortcut, Margin, Modifiers, RichText,
+    self, Color32, FontId, Key, KeyboardShortcut, Margin, Modifiers, RichText,
     Rounding, Sense, Stroke, Vec2,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::code_view::{self, Doc, Search};
 use crate::curl;
 use crate::http::{self, Pending, Response};
 use crate::json_view::{self, TreeState};
@@ -36,8 +37,10 @@ struct Tab {
     req: Request,
     pending: Option<(Pending, Instant)>,
     response: Option<Result<Response, String>>,
-    /// Highlighted pretty body + line-number gutter, cached per theme (dark_mode flag).
-    highlighted: Option<(bool, LayoutJob, String)>,
+    /// Pretty-printed JSON and the raw body, with their fold / search state.
+    pretty_doc: Option<Doc>,
+    raw_doc: Option<Doc>,
+    search: Search,
     req_tab: ReqTab,
     resp_tab: RespTab,
     body_view: BodyView,
@@ -45,12 +48,24 @@ struct Tab {
 }
 
 impl Tab {
+    fn open_search(&mut self) {
+        self.resp_tab = RespTab::Body;
+        // Search works on text, so leave the tree view.
+        if self.body_view == BodyView::Tree {
+            self.body_view = BodyView::Pretty;
+        }
+        self.search.open = true;
+        self.search.focus = true;
+    }
+
     fn new(req: Request) -> Self {
         Self {
             req,
             pending: None,
             response: None,
-            highlighted: None,
+            pretty_doc: None,
+            raw_doc: None,
+            search: Search::default(),
             req_tab: ReqTab::Params,
             resp_tab: RespTab::Body,
             body_view: BodyView::Pretty,
@@ -87,6 +102,7 @@ pub struct App {
 const SEND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Enter);
 const NEW_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::T);
 const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
+const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -144,8 +160,13 @@ impl App {
             let Some((rx, _)) = &tab.pending else { continue };
             if let Ok(result) = rx.try_recv() {
                 tab.pending = None;
-                tab.highlighted = None;
                 tab.tree = TreeState::default();
+                tab.pretty_doc = None;
+                tab.raw_doc = None;
+                if let Ok(r) = &result {
+                    tab.pretty_doc = r.pretty.clone().map(|p| Doc::new(p, true));
+                    tab.raw_doc = Some(Doc::new(r.body.clone(), false));
+                }
                 if matches!(&result, Ok(r) if r.json.is_none()) && tab.body_view == BodyView::Tree {
                     tab.body_view = BodyView::Pretty;
                 }
@@ -494,6 +515,27 @@ impl App {
                     let text = resp.pretty.clone().unwrap_or_else(|| resp.body.clone());
                     ui.ctx().copy_text(text);
                 }
+                let search_btn = ghost_button(ui, RichText::new("Поиск").color(t.weak))
+                    .on_hover_text("⌘F");
+                if search_btn.clicked() {
+                    tab.search.open = !tab.search.open;
+                    tab.search.focus = tab.search.open;
+                    if tab.search.open && tab.body_view == BodyView::Tree {
+                        tab.body_view = BodyView::Pretty;
+                    }
+                }
+                let pretty_doc = match tab.body_view {
+                    BodyView::Pretty => tab.pretty_doc.as_mut().filter(|d| d.has_blocks()),
+                    _ => None,
+                };
+                if let Some(doc) = pretty_doc {
+                    if ghost_button(ui, RichText::new("Свернуть всё").color(t.weak)).clicked() {
+                        doc.fold_all();
+                    }
+                    if ghost_button(ui, RichText::new("Развернуть всё").color(t.weak)).clicked() {
+                        doc.unfold_all();
+                    }
+                }
                 if tab.body_view == BodyView::Tree {
                     if ghost_button(ui, RichText::new("Свернуть всё").color(t.weak)).clicked() {
                         tab.tree.generation += 1;
@@ -508,7 +550,11 @@ impl App {
         });
         ui.add_space(6.0);
 
-        let dark = ui.visuals().dark_mode;
+        if tab.search.open && tab.body_view != BodyView::Tree {
+            search_bar(ui, &mut tab.search);
+            ui.add_space(6.0);
+        }
+
         egui::Frame::none()
             .fill(t.input)
             .stroke(Stroke::new(1.0_f32, t.border))
@@ -518,24 +564,20 @@ impl App {
                 egui::ScrollArea::both()
                     .id_salt(("resp_scroll", tab.body_view as u8))
                     .auto_shrink([false, false])
-                    .show(ui, |ui| match (tab.body_view, &resp.pretty) {
-                        (BodyView::Pretty, Some(pretty)) => {
-                            if tab.highlighted.as_ref().map(|(d, ..)| *d) != Some(dark) {
-                                tab.highlighted = Some((
-                                    dark,
-                                    json_view::highlight(pretty, dark),
-                                    json_view::line_numbers(pretty),
-                                ));
+                    .show(ui, |ui| {
+                        let doc = match tab.body_view {
+                            BodyView::Tree => {
+                                if let Some(json) = &resp.json {
+                                    json_view::tree_view(ui, json, &tab.tree);
+                                }
+                                return;
                             }
-                            let (_, job, gutter) = tab.highlighted.as_ref().unwrap();
-                            json_view::code_view(ui, pretty, job, gutter);
+                            BodyView::Pretty => tab.pretty_doc.as_mut().or(tab.raw_doc.as_mut()),
+                            BodyView::Raw => tab.raw_doc.as_mut(),
+                        };
+                        if let Some(doc) = doc {
+                            code_view::show(ui, doc, &mut tab.search);
                         }
-                        (BodyView::Tree, _) => {
-                            if let Some(json) = &resp.json {
-                                json_view::tree_view(ui, json, &tab.tree);
-                            }
-                        }
-                        _ => plain_view(ui, &resp.body),
                     });
             });
     }
@@ -629,6 +671,9 @@ impl eframe::App for App {
         }
         if ctx.input_mut(|i| i.consume_shortcut(&CLOSE_TAB)) {
             self.close_tab(self.active);
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&FIND)) {
+            self.tabs[self.active].open_search();
         }
 
         let t = theme::palette(self.dark);
@@ -950,14 +995,62 @@ fn body_editor(ui: &mut egui::Ui, req: &mut Request) {
     }
 }
 
-fn plain_view(ui: &mut egui::Ui, text: &str) {
-    let mut buf = text;
-    ui.add(
-        egui::TextEdit::multiline(&mut buf)
-            .code_editor()
-            .frame(false)
-            .desired_width(f32::INFINITY),
-    );
+/// Search field with match counter, previous / next, case toggle and close.
+fn search_bar(ui: &mut egui::Ui, search: &mut Search) {
+    let t = theme::of(ui);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let edit = egui::TextEdit::singleline(&mut search.query)
+            .hint_text("Поиск в ответе")
+            .desired_width(260.0)
+            .margin(Margin::symmetric(8.0, 5.0));
+        let resp = ui.add(edit);
+        if search.focus {
+            resp.request_focus();
+            search.focus = false;
+        }
+        if resp.changed() {
+            search.current = 0;
+            search.reveal = true;
+        }
+        let (enter, shift, escape) = ui.input(|i| {
+            (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape))
+        });
+        if resp.lost_focus() && enter {
+            search.step(!shift);
+            resp.request_focus();
+        }
+        if (resp.has_focus() || resp.lost_focus()) && escape {
+            search.open = false;
+        }
+
+        let counter = match (search.query.is_empty(), search.total) {
+            (true, _) => String::new(),
+            (false, 0) => "Нет совпадений".to_owned(),
+            (false, n) => format!("{} из {n}", search.current + 1),
+        };
+        let color = if !search.query.is_empty() && search.total == 0 { t.red } else { t.weak };
+        ui.add_sized([110.0, 20.0], egui::Label::new(RichText::new(counter).color(color)));
+
+        if ghost_button(ui, RichText::new("↑").color(t.text)).on_hover_text("Предыдущее (Shift+Enter)").clicked() {
+            search.step(false);
+        }
+        if ghost_button(ui, RichText::new("↓").color(t.text)).on_hover_text("Следующее (Enter)").clicked() {
+            search.step(true);
+        }
+        let case_color = if search.case_sensitive { t.accent } else { t.weak };
+        if ghost_button(ui, RichText::new("Aa").color(case_color))
+            .on_hover_text("Учитывать регистр")
+            .clicked()
+        {
+            search.case_sensitive = !search.case_sensitive;
+            search.current = 0;
+            search.reveal = true;
+        }
+        if ghost_button(ui, RichText::new("×").size(16.0).color(t.weak)).on_hover_text("Закрыть (Esc)").clicked() {
+            search.open = false;
+        }
+    });
 }
 
 fn human_size(bytes: usize) -> String {
