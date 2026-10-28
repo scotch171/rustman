@@ -5,7 +5,8 @@ set -e
 cd "$(dirname "$0")/.."
 APP=target/Rustman.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp assets/Rustman.icns "$APP/Contents/Resources/Rustman.icns"
 
 if [ "$UNIVERSAL" = "1" ]; then
   cargo build --release --target aarch64-apple-darwin
@@ -27,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Rustman</string>
   <key>CFBundleIdentifier</key><string>local.rustman</string>
   <key>CFBundleExecutable</key><string>rustman</string>
+  <key>CFBundleIconFile</key><string>Rustman</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>NSHighResolutionCapable</key><true/>

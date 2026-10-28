@@ -14,7 +14,11 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Rustman")
             .with_inner_size([1200.0, 820.0])
-            .with_min_inner_size([460.0, 380.0]),
+            .with_min_inner_size([460.0, 380.0])
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png"))
+                    .expect("bundled icon is a valid PNG"),
+            ),
         ..Default::default()
     };
     eframe::run_native(
