@@ -14,7 +14,7 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Rustman")
             .with_inner_size([1200.0, 820.0])
-            .with_min_inner_size([700.0, 500.0]),
+            .with_min_inner_size([460.0, 380.0]),
         ..Default::default()
     };
     eframe::run_native(

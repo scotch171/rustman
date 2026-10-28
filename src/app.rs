@@ -102,6 +102,8 @@ pub struct App {
 const SEND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Enter);
 const NEW_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::T);
 const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
+/// Below this width toolbars switch to short labels.
+const COMPACT_WIDTH: f32 = 680.0;
 const FIND: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::F);
 
 impl App {
@@ -268,8 +270,10 @@ impl App {
         // URL bar: [METHOD | url........] [Send] [cURL ...]
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            let right_width = 300.0;
-            let bar_width = (ui.available_width() - right_width).max(200.0);
+            let narrow = ui.available_width() < COMPACT_WIDTH;
+            let button_w = if narrow { 72.0 } else { 96.0 };
+            let right_width = if narrow { 190.0 } else { 300.0 };
+            let bar_width = (ui.available_width() - right_width).max(140.0);
 
             egui::Frame::none()
                 .fill(t.input)
@@ -293,7 +297,7 @@ impl App {
                                         .size(13.0)
                                         .color(theme::method_color(tab.req.method, dark)),
                                 )
-                                .width(96.0)
+                                .width(if narrow { 76.0 } else { 96.0 })
                                 .height(300.0)
                                 .show_ui(ui, |ui| {
                                     for m in Method::ALL {
@@ -334,7 +338,7 @@ impl App {
             if tab.pending.is_some() {
                 let cancel = egui::Button::new(RichText::new("Отмена").size(14.0).color(Color32::WHITE))
                     .fill(t.weak)
-                    .min_size(Vec2::new(96.0, 36.0));
+                    .min_size(Vec2::new(button_w, 36.0));
                 if ui.add(cancel).clicked() {
                     tab.pending = None;
                 }
@@ -342,12 +346,16 @@ impl App {
                 let send_btn = egui::Button::new(RichText::new("Send").size(14.0).strong().color(Color32::WHITE))
                     .fill(t.send)
                     .stroke(Stroke::NONE)
-                    .min_size(Vec2::new(96.0, 36.0));
+                    .min_size(Vec2::new(button_w, 36.0));
                 if ui.add(send_btn).on_hover_text("Cmd+Enter").clicked() {
                     send = true;
                 }
             }
-            if ghost_button(ui, RichText::new("Импорт cURL").color(t.weak)).clicked() {
+            let import_label = if narrow { "cURL" } else { "Импорт cURL" };
+            if ghost_button(ui, RichText::new(import_label).color(t.weak))
+                .on_hover_text("Импорт cURL")
+                .clicked()
+            {
                 open_import = true;
             }
             if ghost_button(ui, RichText::new("</>").monospace().color(t.weak))
@@ -384,6 +392,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_salt("req_scroll")
             .auto_shrink([false, false])
+            .min_scrolled_height(32.0)
             .show(ui, |ui| match tab.req_tab {
                 ReqTab::Params => {
                     ui.label(RichText::new("Query Params").size(12.0).color(t.weak));
@@ -471,6 +480,7 @@ impl App {
         };
 
         // Header row: tabs on the left, status / time / size on the right.
+        let narrow = ui.available_width() < COMPACT_WIDTH;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 20.0;
             if underline_tab(ui, tab.resp_tab == RespTab::Body, "Body", None).clicked() {
@@ -482,14 +492,27 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let status = theme::status_color(resp.status, &t);
+                // Narrow windows drop the captions; the values are still clear.
                 ui.label(RichText::new(human_size(resp.size)).color(t.green));
-                ui.label(RichText::new("Size:").color(t.weak));
+                if !narrow {
+                    ui.label(RichText::new("Size:").color(t.weak));
+                }
                 ui.add_space(10.0);
                 ui.label(RichText::new(format!("{} ms", resp.elapsed.as_millis())).color(t.green));
-                ui.label(RichText::new("Time:").color(t.weak));
+                if !narrow {
+                    ui.label(RichText::new("Time:").color(t.weak));
+                }
                 ui.add_space(10.0);
-                ui.label(RichText::new(format!("{} {}", resp.status, resp.reason)).strong().color(status));
-                ui.label(RichText::new("Status:").color(t.weak));
+                let status_text = if narrow {
+                    resp.status.to_string()
+                } else {
+                    format!("{} {}", resp.status, resp.reason)
+                };
+                ui.label(RichText::new(status_text).strong().color(status))
+                    .on_hover_text(format!("{} {}", resp.status, resp.reason));
+                if !narrow {
+                    ui.label(RichText::new("Status:").color(t.weak));
+                }
             });
         });
         theme::rule(ui);
@@ -507,8 +530,12 @@ impl App {
         ui.horizontal(|ui| {
             segmented(ui, &mut tab.body_view, resp.json.is_some());
             ui.add_space(8.0);
-            let kind = if resp.json.is_some() { "JSON" } else { "Text" };
-            ui.label(RichText::new(kind).size(12.0).color(t.accent));
+            if !narrow {
+                let kind = if resp.json.is_some() { "JSON" } else { "Text" };
+                ui.label(RichText::new(kind).size(12.0).color(t.accent));
+            }
+            let (expand_label, collapse_label) =
+                if narrow { ("+", "−") } else { ("Развернуть всё", "Свернуть всё") };
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ghost_button(ui, RichText::new("Копировать").color(t.weak)).clicked() {
@@ -529,19 +556,31 @@ impl App {
                     _ => None,
                 };
                 if let Some(doc) = pretty_doc {
-                    if ghost_button(ui, RichText::new("Свернуть всё").color(t.weak)).clicked() {
+                    if ghost_button(ui, RichText::new(collapse_label).color(t.weak))
+                        .on_hover_text("Свернуть всё")
+                        .clicked()
+                    {
                         doc.fold_all();
                     }
-                    if ghost_button(ui, RichText::new("Развернуть всё").color(t.weak)).clicked() {
+                    if ghost_button(ui, RichText::new(expand_label).color(t.weak))
+                        .on_hover_text("Развернуть всё")
+                        .clicked()
+                    {
                         doc.unfold_all();
                     }
                 }
                 if tab.body_view == BodyView::Tree {
-                    if ghost_button(ui, RichText::new("Свернуть всё").color(t.weak)).clicked() {
+                    if ghost_button(ui, RichText::new(collapse_label).color(t.weak))
+                        .on_hover_text("Свернуть всё")
+                        .clicked()
+                    {
                         tab.tree.generation += 1;
                         tab.tree.open_all = Some(false);
                     }
-                    if ghost_button(ui, RichText::new("Развернуть всё").color(t.weak)).clicked() {
+                    if ghost_button(ui, RichText::new(expand_label).color(t.weak))
+                        .on_hover_text("Развернуть всё")
+                        .clicked()
+                    {
                         tab.tree.generation += 1;
                         tab.tree.open_all = Some(true);
                     }
@@ -684,7 +723,9 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("request")
             .resizable(true)
             .default_height(300.0)
-            .min_height(140.0)
+            .min_height(180.0)
+            // Always leave room for the response below.
+            .max_height((ctx.screen_rect().height() - 150.0).max(180.0))
             .frame(egui::Frame::none().fill(t.bg).inner_margin(Margin::symmetric(16.0, 12.0)))
             .show(ctx, |ui| self.request_editor(ui, ctx));
         egui::CentralPanel::default()
@@ -1002,7 +1043,7 @@ fn search_bar(ui: &mut egui::Ui, search: &mut Search) {
         ui.spacing_mut().item_spacing.x = 4.0;
         let edit = egui::TextEdit::singleline(&mut search.query)
             .hint_text("Поиск в ответе")
-            .desired_width(260.0)
+            .desired_width((ui.available_width() - 250.0).clamp(80.0, 260.0))
             .margin(Margin::symmetric(8.0, 5.0));
         let resp = ui.add(edit);
         if search.focus {
@@ -1026,11 +1067,11 @@ fn search_bar(ui: &mut egui::Ui, search: &mut Search) {
 
         let counter = match (search.query.is_empty(), search.total) {
             (true, _) => String::new(),
-            (false, 0) => "Нет совпадений".to_owned(),
+            (false, 0) => "Не найдено".to_owned(),
             (false, n) => format!("{} из {n}", search.current + 1),
         };
         let color = if !search.query.is_empty() && search.total == 0 { t.red } else { t.weak };
-        ui.add_sized([110.0, 20.0], egui::Label::new(RichText::new(counter).color(color)));
+        ui.add_sized([96.0, 20.0], egui::Label::new(RichText::new(counter).color(color)).truncate());
 
         if ghost_button(ui, RichText::new("↑").color(t.text)).on_hover_text("Предыдущее (Shift+Enter)").clicked() {
             search.step(false);
