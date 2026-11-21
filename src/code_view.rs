@@ -3,11 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
-use std::sync::Arc;
 
 use eframe::egui::{
     self, epaint::text::cursor::CCursor, text::LayoutJob, text::LayoutSection, Color32, FontId,
-    Galley, Margin, Sense, Shape, Stroke, Vec2,
+    Margin, Sense, Shape, Stroke, Vec2,
 };
 
 use crate::json_view;
@@ -61,7 +60,10 @@ struct Cache {
     key: (bool, u64, String, bool, usize),
     visible: String,
     rows: Vec<RowInfo>,
-    galley: Arc<Galley>,
+    /// The galley itself is not kept: egui rebuilds its font atlas from time
+    /// to time (when it fills up or the scale changes), which invalidates the
+    /// glyph positions of old galleys. Its own layout cache handles that.
+    job: LayoutJob,
     /// Visible byte range of the current match, if it is not hidden by a fold.
     current: Option<Range<usize>>,
 }
@@ -171,7 +173,7 @@ impl Doc {
         self.matches = find_all(&self.text, query, case_sensitive);
     }
 
-    fn build_cache(&mut self, ui: &egui::Ui, dark: bool, search: &Search) {
+    fn build_cache(&mut self, dark: bool, search: &Search) {
         let key = (
             dark,
             self.fold_version,
@@ -193,7 +195,10 @@ impl Doc {
             if i > 0 {
                 visible.push('\n');
             }
-            rows.push(RowInfo { line: i, start: visible.len() });
+            rows.push(RowInfo {
+                line: i,
+                start: visible.len(),
+            });
             visible.push_str(self.line(i));
             match self.blocks.get(&i) {
                 Some(&close) if self.folded.contains(&i) => {
@@ -209,10 +214,8 @@ impl Doc {
 
         // Map matches from the full text to the visible text; matches inside
         // folded blocks are simply not shown.
-        let mut marks: Vec<(Range<usize>, Color32)> = placeholders
-            .into_iter()
-            .map(|r| (r, t.border))
-            .collect();
+        let mut marks: Vec<(Range<usize>, Color32)> =
+            placeholders.into_iter().map(|r| (r, t.border)).collect();
         let mut current = None;
         for (n, m) in self.matches.iter().enumerate() {
             let line = self.line_of(m.start);
@@ -243,12 +246,11 @@ impl Doc {
         };
         apply_marks(&mut job, &marks);
         job.wrap.max_width = f32::INFINITY;
-        let galley = ui.fonts(|f| f.layout_job(job));
         self.cache = Some(Cache {
             key,
             visible,
             rows,
-            galley,
+            job,
             current,
         });
     }
@@ -318,7 +320,11 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Doc, search: &mut Search) {
     let dark = ui.visuals().dark_mode;
     let t = theme::of(ui);
 
-    let query = if search.open { search.query.as_str() } else { "" };
+    let query = if search.open {
+        search.query.as_str()
+    } else {
+        ""
+    };
     doc.update_matches(query, search.case_sensitive);
     search.total = doc.matches.len();
     if search.current >= search.total {
@@ -336,10 +342,10 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Doc, search: &mut Search) {
         current: search.current,
         ..Default::default()
     };
-    doc.build_cache(ui, dark, &effective);
+    doc.build_cache(dark, &effective);
 
     let cache = doc.cache.as_ref().unwrap();
-    let galley = cache.galley.clone();
+    let galley = ui.fonts(|f| f.layout_job(cache.job.clone()));
 
     let digits = doc.line_starts.len().to_string().len() as f32;
     let char_w = ui.fonts(|f| f.glyph_width(&FontId::monospace(FONT_SIZE), '0'));
@@ -394,9 +400,17 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Doc, search: &mut Search) {
             let color = if resp.hovered() { t.text } else { t.weak };
             let c = rect.center();
             let points = if folded {
-                vec![c + Vec2::new(-2.5, -4.0), c + Vec2::new(3.0, 0.0), c + Vec2::new(-2.5, 4.0)]
+                vec![
+                    c + Vec2::new(-2.5, -4.0),
+                    c + Vec2::new(3.0, 0.0),
+                    c + Vec2::new(-2.5, 4.0),
+                ]
             } else {
-                vec![c + Vec2::new(-4.0, -2.5), c + Vec2::new(4.0, -2.5), c + Vec2::new(0.0, 3.0)]
+                vec![
+                    c + Vec2::new(-4.0, -2.5),
+                    c + Vec2::new(4.0, -2.5),
+                    c + Vec2::new(0.0, 3.0),
+                ]
             };
             painter.add(Shape::convex_polygon(points, color, Stroke::NONE));
             if resp.clicked() {
@@ -431,7 +445,8 @@ pub fn show(ui: &mut egui::Ui, doc: &mut Doc, search: &mut Search) {
 mod tests {
     use super::*;
 
-    const JSON: &str = "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {\n    \"c\": \"Тест\"\n  }\n}";
+    const JSON: &str =
+        "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {\n    \"c\": \"Тест\"\n  }\n}";
 
     #[test]
     fn finds_blocks() {
